@@ -13,7 +13,7 @@ Gem::Specification.new do |s|
   s.email   = ["garbagecat10@gmail.com", "aman@tmm1.net"]
 
   s.files = `git ls-files`.split("\n")
-  s.extensions = ["ext/extconf.rb", "ext/fastfilereader/extconf.rb"]
+  s.extensions = ["ext/extconf.rb", "ext/fastfilereader/extconf.rb"] unless RUBY_PLATFORM =~ /java/
 
   s.add_development_dependency 'rake-compiler', '~> 0.8.3'
   s.add_development_dependency 'yard', ">= 0.8.5.2"
