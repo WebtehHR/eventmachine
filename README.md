@@ -1,4 +1,4 @@
-# About EventMachine #
+# About EventMachine  [![Code Climate](https://codeclimate.com/github/eventmachine/eventmachine.png)](https://codeclimate.com/github/eventmachine/eventmachine)
 
 
 ## What is EventMachine ##
@@ -75,7 +75,7 @@ Here's a fully-functional echo server written with EventMachine:
 
        def unbind
          puts "-- someone disconnected from the echo server!"
-      end
+       end
     end
 
     # Note that this will block current thread.

@@ -382,15 +382,27 @@ EventMachine_t::_DispatchHeartbeats
 
 void EventMachine_t::_DispatchHeartbeats()
 {
+	// Store the first processed heartbeat descriptor and bail out if
+	// we see it again. This fixes an infinite loop in case the system time
+	// is changed out from underneath MyCurrentLoopTime.
+	const EventableDescriptor *head = NULL;
+
 	while (true) {
 		multimap<uint64_t,EventableDescriptor*>::iterator i = Heartbeats.begin();
 		if (i == Heartbeats.end())
 			break;
 		if (i->first > MyCurrentLoopTime)
 			break;
+
 		EventableDescriptor *ed = i->second;
+		if (ed == head)
+			break;
+
 		ed->Heartbeat();
 		QueueHeartbeat(ed);
+
+		if (head == NULL)
+			head = ed;
 	}
 }
 
@@ -675,7 +687,7 @@ EventMachine_t::_TimeTilNextEvent
 
 timeval EventMachine_t::_TimeTilNextEvent()
 {
-	// 29jul11: Changed calculation base from MyCurrentLoopTime to the 
+	// 29jul11: Changed calculation base from MyCurrentLoopTime to the
 	// real time. As MyCurrentLoopTime is set at the beginning of an
 	// iteration and this calculation is done at the end, evenmachine
 	// will potentially oversleep by the amount of time the iteration
@@ -697,10 +709,12 @@ timeval EventMachine_t::_TimeTilNextEvent()
 	if (!NewDescriptors.empty() || !ModifiedDescriptors.empty()) {
 		next_event = current_time;
 	}
-	
+
 	timeval tv;
 
-	if (next_event == 0 || NumCloseScheduled > 0) {
+	if (NumCloseScheduled > 0 || bTerminateSignalReceived) {
+		tv.tv_sec = tv.tv_usec = 0;
+	} else if (next_event == 0) {
 		tv = Quantum;
 	} else {
 		if (next_event > current_time) {
@@ -1399,6 +1413,14 @@ int EventMachine_t::DetachFD (EventableDescriptor *ed)
 	// Prevent the descriptor from being modified, in case DetachFD was called from a timer or next_tick
 	ModifiedDescriptors.erase (ed);
 
+	// Prevent the descriptor from being added, in case DetachFD was called in the same tick as AttachFD
+	for (size_t i = 0; i < NewDescriptors.size(); i++) {
+		if (ed == NewDescriptors[i]) {
+			NewDescriptors.erase(NewDescriptors.begin() + i);
+			break;
+		}
+	}
+
 	// Set MySocket = INVALID_SOCKET so ShouldDelete() is true (and the descriptor gets deleted and removed),
 	// and also to prevent anyone from calling close() on the detached fd
 	ed->SetSocketInvalid();
@@ -1491,8 +1513,6 @@ const unsigned long EventMachine_t::CreateTcpServer (const char *server, int por
 	if (!bind_here)
 		return 0;
 
-	unsigned long output_binding = 0;
-
 	//struct sockaddr_in sin;
 
 	int sd_accept = socket (family, SOCK_STREAM, 0);
@@ -1529,25 +1549,7 @@ const unsigned long EventMachine_t::CreateTcpServer (const char *server, int por
 		goto fail;
 	}
 
-	{
-		// Set the acceptor non-blocking.
-		// THIS IS CRUCIALLY IMPORTANT because we read it in a select loop.
-		if (!SetSocketNonblocking (sd_accept)) {
-		//int val = fcntl (sd_accept, F_GETFL, 0);
-		//if (fcntl (sd_accept, F_SETFL, val | O_NONBLOCK) == -1) {
-			goto fail;
-		}
-	}
-
-	{ // Looking good.
-		AcceptorDescriptor *ad = new AcceptorDescriptor (sd_accept, this);
-		if (!ad)
-			throw std::runtime_error ("unable to allocate acceptor");
-		Add (ad);
-		output_binding = ad->GetBinding();
-	}
-
-	return output_binding;
+	return AttachSD(sd_accept);
 
 	fail:
 	if (sd_accept != INVALID_SOCKET)
@@ -1838,7 +1840,6 @@ const unsigned long EventMachine_t::CreateUnixDomainServer (const char *filename
 
 	// The whole rest of this function is only compiled on Unix systems.
 	#ifdef OS_UNIX
-	unsigned long output_binding = 0;
 
 	struct sockaddr_un s_sun;
 
@@ -1876,6 +1877,24 @@ const unsigned long EventMachine_t::CreateUnixDomainServer (const char *filename
 		goto fail;
 	}
 
+	return AttachSD(sd_accept);
+
+	fail:
+	if (sd_accept != INVALID_SOCKET)
+		close (sd_accept);
+	return 0;
+	#endif // OS_UNIX
+}
+
+
+/**************************************
+EventMachine_t::AttachSD
+**************************************/
+
+const unsigned long EventMachine_t::AttachSD (int sd_accept)
+{
+	unsigned long output_binding = 0;
+
 	{
 		// Set the acceptor non-blocking.
 		// THIS IS CRUCIALLY IMPORTANT because we read it in a select loop.
@@ -1900,7 +1919,6 @@ const unsigned long EventMachine_t::CreateUnixDomainServer (const char *filename
 	if (sd_accept != INVALID_SOCKET)
 		close (sd_accept);
 	return 0;
-	#endif // OS_UNIX
 }
 
 
